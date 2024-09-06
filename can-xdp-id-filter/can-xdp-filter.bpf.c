@@ -14,11 +14,33 @@ struct can_frame {
 };
 
 struct inner_map {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1024);
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 255);
     __type(key, __u32);  // can_id u32
-    __type(value, __u32); // XDP_BLOCK, XDP_PASS 
+    __type(value, __u32); // action XDP_BLOCK, XDP_PASS 
 } xdp_can_ids_map SEC(".maps");
+
+static bool check_dlc(__u8 can_dlc)
+{
+    if(can_dlc <= 3)
+    {
+    	return true;
+    }
+    else 
+    {
+	return false;
+    }
+}
+
+static bool check_crc(__u8 can_data[])
+{
+    if(can_data[3] == 0x44)
+    {
+        return true;	   
+    }
+
+    return false;
+}
 
 SEC("xdp")
 int xdp_filter_can(struct xdp_md *ctx)
@@ -27,12 +49,12 @@ int xdp_filter_can(struct xdp_md *ctx)
     void *data = (void *)(long)ctx->data;
     struct can_frame *frame = data;
     __u32 can_id = 0;
-    __u32 value;
+    __u32 opmode;
     void *ret;
+    __u8 can_data[8];
 
     if(data + sizeof(struct can_frame) > data_end)
     {
-        bpf_printk("drop");
         return XDP_DROP;
     }
 
@@ -49,19 +71,58 @@ int xdp_filter_can(struct xdp_md *ctx)
         frame->data[7]); // 8 data bytes
 
     can_id = frame->can_id;
-    //if(frame->can_id == 0x111) // firewall 0x111 packets
-    //    return XDP_PASS;
+
+    // look up can_id in map
     ret = bpf_map_lookup_elem(&xdp_can_ids_map, &can_id);
-    bpf_printk("ID %x %d = %d", can_id, can_id, ret);
-    if(ret < 0)
-	return XDP_DROP;
+    if(!ret) // can_id not found in the map
+    {
+	// look up the default behavior
+        can_id = 0; // default ID
+        ret = bpf_map_lookup_elem(&xdp_can_ids_map, &can_id);
+        if(!ret) // user didn't set the default 
+            return XDP_DROP;
 
-    bpf_probe_read_kernel(&value, sizeof(__u32), ret);
-    if(value == 1)
-        return XDP_PASS;
+        bpf_probe_read_kernel(&opmode, sizeof(__u32), ret);
+        if(opmode == 2)
+        {
+    	    return XDP_PASS;
+        } else {
+            return XDP_DROP;
+        }
+    } else {
+	// can_id exists in map
+        bpf_probe_read_kernel(&opmode, sizeof(__u32), ret);
+        switch(opmode) {
+            case 0: // XDP_ABORTED
+            case 1: // XDP_DROP
+            case 2: // XDP_DROP
+                return XDP_DROP;
+            case 3: // XDP_PASS
+            case 4: // XDP_TX
+            case 5: // XDP_REDIRECT
+                return XDP_PASS;
+            case 6: // LEN
+                if(check_dlc(frame->can_dlc))
+                {
+                    return XDP_PASS;
+                } else {
+            	return XDP_DROP;
+                }
+                break;
+            case 7: // CRC
+        	bpf_probe_read_kernel(&can_data, 8, frame->data);
+                if(check_crc(can_data))
+                {
+                    return XDP_PASS;		   
+                } else {
+            	    return XDP_DROP;
+                }
+            default:
+                return XDP_DROP;
+        }
+    }
 
-    // default block
-    return XDP_DROP;
+    return XDP_DROP; // catch all
 }
 
 char _license[] SEC("license") = "GPL";
