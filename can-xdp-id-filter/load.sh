@@ -25,8 +25,8 @@ check_if()
 
 check_if_container()
 {
-    local pid=$1
-    local dev=$2
+    local dev=$1
+    local pid=$2
     if [ -z $pid ] ; then
 	echo "pid is not an number" >&2
         return 1
@@ -36,7 +36,7 @@ check_if_container()
     fi
     ps $pid 1>/dev/null 2>/dev/null || perror "process $pid not found"
 
-    nsenter -t $pid -n ip link show dev $dev
+    nsenter -t $pid -n ip link show dev $dev 1>/dev/null 2>/dev/null
     return $?
 }
 
@@ -51,10 +51,10 @@ load()
 
 load_container()
 {
-    local pid=$1
-    local dev=$2
-    ps $pid || perror "process $pid not found"
-    check_if_container $pid $dev || perror "interface not found"
+    local dev=$1
+    local pid=$2
+    ps $pid 1>/dev/null 2>/dev/null || perror "process '$pid' not found"
+    check_if_container $dev $pid || perror "interface '$dev' not found in container pid '$pid'"
 
     bpftool prog load $BPF_FILE $PIN_FILE-$pid || perror "cannot load eBPF program"
     nsenter -t $pid -n bpftool net attach xdp name $PROGNAME dev $dev || perror "cannot attach eBPF program"
@@ -73,12 +73,11 @@ unload()
 
 unload_container()
 {
-    local pid=$1
-    local dev=$2
-    ps $pid || perror "process $pid not found"
-    check_if_container $pid $dev
+    local dev=$1
+    local pid=$2
+    ps $pid 1>/dev/null 2>/dev/null || perror "process $pid not found"
+    check_if_container $dev $pid
 
-    rm $PIN_FILE-$pid 
     if [ -f $PIN_FILE-$pid ] ; then
         rm $PIN_FILE-$pid
     fi
@@ -89,7 +88,15 @@ clean()
 {
     if [ -f $PIN_FILE ] ;
     then
+	echo "Pinfile '$PIN_FILE' removed." >&2
         rm $PIN_FILE
+    fi
+    echo "Look for '$PIN_FILE-<pid>' ..."
+    echo 
+    bpftool prog show name $PROGNAME
+    if [ $? -eq 0 ]
+    then
+	 echo "try to unload the programs"
     fi
 }
 
@@ -125,7 +132,7 @@ usage()
     echo -e "unload\tunloads the program and detaches from the interface."
     echo
     echo "start/load/unload <dev>"
-    echo "start/load_container/unload_container <pid> <dev>"
+    echo "start/load_container/unload_container <dev> <pid>"
     echo
 }
 
@@ -152,20 +159,23 @@ then
 	cmd=$1
 	shift 
 	dev=$1
+	[[ "$dev" =~ [:alnum:] ]] || perror "the interface '$dev' looks odd."
 	case $cmd in
 		load)
 			echo "loading can-xdp-fw and attaching it to $dev"
 			load $dev
+			ip link show $dev
 			;;
 		unload)
 			echo "unloading can-xdp-fw and attaching it to $dev"
 			unload $dev
+			ip link show $dev 
 			;;
 		start)
 			echo "loading can-xdp-fw and attaching it to $dev"
 			trap signal_handler SIGINT
 			load $dev
-			ip link show vcan0
+			ip link show $dev 
 			echo
 			shell $dev
 			echo "unloading can-xdp-fw and detaching it to $dev"
@@ -185,7 +195,11 @@ then
 	cmd=$1
 	shift 
 	dev=$1
-	pid=$2
+	let pid=$2
+	# check format
+	[[ "$dev" =~ [:alnum:] ]] || perror "the interface '$dev' looks odd."
+        #[[ "$pid" =~ [:digit:] ]] || perror "pid '$pid' should be a number!"
+	[ $pid -ne 0 ] || perror "pid '$pid' looks odd"
 	case $cmd in
 		load_container)
 			echo "loading can-xdp-fw and attaching it to $dev in container (pid $pid)."
