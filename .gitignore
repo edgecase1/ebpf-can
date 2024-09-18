@@ -1,2 +1,5 @@
-root.bpf.o
+*.bpf.o
+*.o
 vmlinux.h
+*.swp
+
