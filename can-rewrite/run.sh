@@ -8,11 +8,11 @@ echo
 
 if [ $# -eq 0 ] ; then
     # just run with the vcan0 as default
-    source ../ebpfloader.sh start_tc $DEFAULT_DEV
+    source ../ebpfloader.sh tc_start $DEFAULT_DEV
 elif [ $# -eq 1 ] ; then
     param_dev=$1
     # start with the parameter
-    source ../ebpfloader.sh start_tc $param_dev
+    source ../ebpfloader.sh tc_start $param_dev
 else
     # access all parameters
     source ../ebpfloader.sh
