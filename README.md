@@ -58,3 +58,5 @@ Candlestick chart written to compare_candles.html
 python -m http.server 8000
 http://X.X.X.X:8000/compare_candles.html
 ```
+
+![compare_candles.PNG](compare_candles.PNG)
